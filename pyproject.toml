@@ -5,10 +5,11 @@ description = "一系列 WebRTC 调试工具"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "flet[all]>=0.28.3",
+    "flet>=0.28.3",
 ]
 
 [dependency-groups]
 dev = [
-    "pyinstaller>=6.17.0",
+    "flet[all]>=0.28.3",
+    "pyinstaller>=6.11.1",
 ]
