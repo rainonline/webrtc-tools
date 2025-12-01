@@ -1,5 +1,5 @@
 import flet as ft
-from main import check_stun_server
+from main import check_stun_server, detect_nat_type, NatType
 
 
 def main(page: ft.Page):
@@ -8,7 +8,7 @@ def main(page: ft.Page):
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.window.width = 480
-    page.window.height = 800
+    page.window.height = 850
     page.window.resizable = True
 
     def toggle_theme(e):
@@ -36,9 +36,20 @@ def main(page: ft.Page):
 
     loading_indicator = ft.ProgressRing(visible=False)
     test_button = ft.ElevatedButton(text="Test Connectivity", icon=ft.Icons.PLAY_ARROW, width=200)
+    
+    # NAT Detection UI elements
+    nat_result_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, size=40, color=ft.Colors.GREY)
+    nat_result_text = ft.Text("Ready to detect", size=20, weight=ft.FontWeight.BOLD)
+    nat_result_details = ft.Column(scroll=ft.ScrollMode.AUTO, height=100)
+    nat_loading_indicator = ft.ProgressRing(visible=False)
+    nat_detect_button = ft.ElevatedButton(text="Detect NAT Type", icon=ft.Icons.ROUTER, width=200)
 
     def log(message: str, color: str | None = None):
         result_details.controls.append(ft.Text(message, color=color, selectable=True))
+        page.update()
+
+    def nat_log(message: str, color: str | None = None):
+        nat_result_details.controls.append(ft.Text(message, color=color, selectable=True))
         page.update()
 
     def on_test_click(e):
@@ -113,7 +124,65 @@ def main(page: ft.Page):
         
         page.update()
 
+    def on_nat_detect_click(e):
+        # Reset NAT detection UI
+        nat_result_details.controls.clear()
+        nat_result_icon.name = ft.Icons.HOURGLASS_EMPTY
+        nat_result_icon.color = ft.Colors.PRIMARY
+        nat_result_text.value = "Detecting..."
+        nat_result_text.color = None
+        nat_loading_indicator.visible = True
+        nat_detect_button.disabled = True
+        page.update()
+
+        try:
+            nat_log("🔍 Querying STUN servers...", ft.Colors.PRIMARY)
+            
+            # Run NAT detection
+            result = detect_nat_type(timeout=5.0)
+
+            nat_loading_indicator.visible = False
+            nat_detect_button.disabled = False
+
+            # Map NAT types to icons and colors
+            nat_type_config = {
+                NatType.OPEN: (ft.Icons.PUBLIC, ft.Colors.GREEN, "🌐"),
+                NatType.FULL_CONE: (ft.Icons.CHECK_CIRCLE, ft.Colors.GREEN, "🟢"),
+                NatType.RESTRICTED_CONE: (ft.Icons.WARNING, ft.Colors.YELLOW, "🟡"),
+                NatType.PORT_RESTRICTED_CONE: (ft.Icons.WARNING, ft.Colors.ORANGE, "🟠"),
+                NatType.SYMMETRIC: (ft.Icons.ERROR, ft.Colors.RED, "🔴"),
+                NatType.BLOCKED: (ft.Icons.BLOCK, ft.Colors.RED, "⛔"),
+                NatType.UNKNOWN: (ft.Icons.HELP_OUTLINE, ft.Colors.GREY, "❓"),
+            }
+
+            icon, color, emoji = nat_type_config.get(
+                result.nat_type, 
+                (ft.Icons.HELP_OUTLINE, ft.Colors.GREY, "❓")
+            )
+
+            nat_result_icon.name = icon
+            nat_result_icon.color = color
+            nat_result_text.value = result.nat_type.value
+            nat_result_text.color = color
+
+            nat_log(f"{emoji} NAT Type: {result.nat_type.value}", color)
+            if result.external_ip:
+                nat_log(f"External Address: {result.external_ip}:{result.external_port}")
+            if result.details:
+                nat_log(f"Details: {result.details}", ft.Colors.SECONDARY)
+
+        except Exception as ex:
+            nat_loading_indicator.visible = False
+            nat_detect_button.disabled = False
+            nat_result_icon.name = ft.Icons.ERROR
+            nat_result_icon.color = ft.Colors.RED
+            nat_result_text.value = "Error"
+            nat_log(f"Unexpected error: {ex}", ft.Colors.RED)
+        
+        page.update()
+
     test_button.on_click = on_test_click
+    nat_detect_button.on_click = on_nat_detect_click
 
     # Layout
     page.add(
@@ -152,6 +221,31 @@ def main(page: ft.Page):
                         )
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                )
+            ),
+            width=450
+        ),
+        # NAT Detection Card
+        ft.Card(
+            content=ft.Container(
+                padding=20,
+                content=ft.Column(
+                    [
+                        ft.Text("NAT Type Detection", size=16, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Row([nat_detect_button, nat_loading_indicator], alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Divider(),
+                        ft.Row([nat_result_icon, nat_result_text], alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Container(
+                            content=nat_result_details,
+                            bgcolor=ft.Colors.ON_INVERSE_SURFACE,
+                            border_radius=5,
+                            padding=10,
+                            width=410
+                        )
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=10
                 )
             ),
             width=450
