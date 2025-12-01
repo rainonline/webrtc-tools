@@ -351,13 +351,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="Test coturn/STUN server availability")
 	parser.add_argument(
 		"--host",
-		default="stun.allroundai.com",
+		default="stun.l.google.com",
 		help="STUN/TURN server hostname or IP (default: %(default)s)",
 	)
 	parser.add_argument(
 		"--port",
 		type=int,
-		default=3478,
+		default=19302,
 		help="Server port (default: %(default)s)",
 	)
 	parser.add_argument(
