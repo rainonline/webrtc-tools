@@ -24,7 +24,7 @@ from typing import Iterator, List, Optional, Tuple
 
 
 class NatType(Enum):
-	"""NAT type classifications based on RFC 3489."""
+	"""NAT type classifications based on RFC 5780 (NAT Behavior Discovery)."""
 	OPEN = "Open Internet"
 	FULL_CONE = "Full Cone NAT"
 	RESTRICTED_CONE = "Restricted Cone NAT"
@@ -384,7 +384,7 @@ def _get_stun_mapping(
 	local_sock: Optional[socket.socket] = None,
 ) -> Optional[Tuple[str, int]]:
 	"""Get the external IP and port mapping from a STUN server.
-	
+
 	If local_sock is provided, it will be reused. Otherwise a new socket is created.
 	Returns (external_ip, external_port) or None if failed.
 	"""
@@ -421,23 +421,21 @@ def detect_nat_type(
 	timeout: float = 2.0,
 ) -> NatResult:
 	"""Detect the NAT type of the current network.
-	
+
 	This function uses multiple STUN servers to determine the NAT type.
 	The detection algorithm:
 	1. Query first STUN server to get external IP/port (Test I)
 	2. Query second STUN server with the same local socket (Test II)
 	3. Compare the results to determine NAT type
-	
-	NAT Types:
-	- Open Internet: Local IP equals external IP
-	- Full Cone: Same external IP:port for all STUN servers
-	- Symmetric: Different external port for different destinations
-	- Restricted/Port Restricted: Same port mapping, but with filtering
-	
+
+	Note: This simplified detection can only distinguish between Symmetric NAT
+	and Cone NAT (Full/Restricted/Port-Restricted). Full classification would
+	require receiving unsolicited packets from different addresses.
+
 	Args:
 		stun_servers: List of (host, port) tuples for STUN servers
 		timeout: Socket timeout in seconds
-	
+
 	Returns:
 		NatResult with the detected NAT type and external address
 	"""
@@ -538,16 +536,15 @@ def detect_nat_type(
 					details=f"Port mapping changes per destination ({port1} vs {port2})"
 				)
 			
-			# Same IP and same port - could be Full Cone, Restricted Cone, or Port Restricted Cone
-			# Without being able to test incoming connections from different IPs,
-			# we can only confirm it's a cone NAT (not symmetric)
-			# We'll report as Full Cone as the most optimistic classification
-			# that matches the observed behavior
+			# Same IP and same port - this indicates Cone NAT behavior
+			# Note: Without testing unsolicited incoming packets, we cannot
+			# distinguish Full Cone, Restricted Cone, or Port Restricted Cone.
+			# We report as Full Cone as it's compatible with all cone behaviors.
 			return NatResult(
 				nat_type=NatType.FULL_CONE,
 				external_ip=ip1,
 				external_port=port1,
-				details="Consistent port mapping across different destinations"
+				details="Consistent port mapping (Cone NAT behavior detected)"
 			)
 			
 	except OSError as e:
