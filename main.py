@@ -19,7 +19,28 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterator, List, Optional, Tuple
+
+
+class NatType(Enum):
+	"""NAT type classifications based on RFC 5780 (NAT Behavior Discovery)."""
+	OPEN = "Open Internet"
+	FULL_CONE = "Full Cone NAT"
+	RESTRICTED_CONE = "Restricted Cone NAT"
+	PORT_RESTRICTED_CONE = "Port Restricted Cone NAT"
+	SYMMETRIC = "Symmetric NAT"
+	BLOCKED = "UDP Blocked"
+	UNKNOWN = "Unknown"
+
+
+@dataclass
+class NatResult:
+	"""Result of NAT type detection."""
+	nat_type: NatType
+	external_ip: Optional[str] = None
+	external_port: Optional[int] = None
+	details: Optional[str] = None
 
 
 MAGIC_COOKIE = 0x2112A442
@@ -347,8 +368,196 @@ def check_stun_server(
 	return StunResult(success=False, error=last_error)
 
 
+# Default STUN servers for NAT detection
+DEFAULT_STUN_SERVERS = [
+	("stun.l.google.com", 19302),
+	("stun1.l.google.com", 19302),
+	("stun2.l.google.com", 19302),
+	("stun.cloudflare.com", 3478),
+]
+
+
+def _get_stun_mapping(
+	host: str,
+	port: int,
+	timeout: float,
+	local_sock: Optional[socket.socket] = None,
+) -> Optional[Tuple[str, int]]:
+	"""Get the external IP and port mapping from a STUN server.
+
+	If local_sock is provided, it will be reused. Otherwise a new socket is created.
+	Returns (external_ip, external_port) or None if failed.
+	"""
+	try:
+		request, transaction_id = build_binding_request()
+		
+		if local_sock:
+			sock = local_sock
+			should_close = False
+		else:
+			sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+			should_close = True
+		
+		try:
+			sock.settimeout(timeout)
+			sock.sendto(request, (host, port))
+			data, _ = sock.recvfrom(2048)
+			
+			msg_type = struct.unpack("!H", data[:2])[0]
+			if msg_type == STUN_BINDING_SUCCESS:
+				ip, mapped_port = parse_stun_response(data, transaction_id)
+				return (ip, mapped_port)
+		finally:
+			if should_close:
+				sock.close()
+	except (socket.timeout, TimeoutError, OSError, ValueError):
+		pass
+	
+	return None
+
+
+def detect_nat_type(
+	stun_servers: Optional[List[Tuple[str, int]]] = None,
+	timeout: float = 2.0,
+) -> NatResult:
+	"""Detect the NAT type of the current network.
+
+	This function uses multiple STUN servers to determine the NAT type.
+	The detection algorithm:
+	1. Query first STUN server to get external IP/port (Test I)
+	2. Query second STUN server with the same local socket (Test II)
+	3. Compare the results to determine NAT type
+
+	Note: This simplified detection can only distinguish between Symmetric NAT
+	and Cone NAT (Full/Restricted/Port-Restricted). Full classification would
+	require receiving unsolicited packets from different addresses.
+
+	Args:
+		stun_servers: List of (host, port) tuples for STUN servers
+		timeout: Socket timeout in seconds
+
+	Returns:
+		NatResult with the detected NAT type and external address
+	"""
+	servers = stun_servers or DEFAULT_STUN_SERVERS
+	
+	if len(servers) < 2:
+		return NatResult(
+			nat_type=NatType.UNKNOWN,
+			details="At least 2 STUN servers required for NAT detection"
+		)
+	
+	# Test I: Query first STUN server
+	result1 = _get_stun_mapping(servers[0][0], servers[0][1], timeout)
+	
+	if not result1:
+		return NatResult(
+			nat_type=NatType.BLOCKED,
+			details="Unable to reach STUN server - UDP may be blocked"
+		)
+	
+	external_ip1, external_port1 = result1
+	
+	# Check if we're on open internet (local IP == external IP)
+	try:
+		# Get local IP by creating a dummy connection
+		with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+			s.connect((servers[0][0], servers[0][1]))
+			local_ip = s.getsockname()[0]
+		
+		if local_ip == external_ip1:
+			return NatResult(
+				nat_type=NatType.OPEN,
+				external_ip=external_ip1,
+				external_port=external_port1,
+				details="Public IP address detected - no NAT"
+			)
+	except OSError:
+		pass
+	
+	# Test II: Query second STUN server with the SAME local socket
+	# This tests if the external port changes based on destination
+	try:
+		with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+			sock.settimeout(timeout)
+			
+			# Get mapping from server 1
+			mapping1 = _get_stun_mapping(
+				servers[0][0], servers[0][1], timeout, sock
+			)
+			
+			if not mapping1:
+				return NatResult(
+					nat_type=NatType.UNKNOWN,
+					external_ip=external_ip1,
+					external_port=external_port1,
+					details="Failed to get consistent mapping from first server"
+				)
+			
+			# Get mapping from server 2 with same socket
+			mapping2 = _get_stun_mapping(
+				servers[1][0], servers[1][1], timeout, sock
+			)
+			
+			if not mapping2:
+				# Second server unreachable, try third server if available
+				if len(servers) > 2:
+					mapping2 = _get_stun_mapping(
+						servers[2][0], servers[2][1], timeout, sock
+					)
+			
+			if not mapping2:
+				return NatResult(
+					nat_type=NatType.UNKNOWN,
+					external_ip=mapping1[0],
+					external_port=mapping1[1],
+					details="Unable to reach secondary STUN servers"
+				)
+			
+			# Compare mappings
+			ip1, port1 = mapping1
+			ip2, port2 = mapping2
+			
+			if ip1 != ip2:
+				# Different external IPs - likely multi-homed or carrier-grade NAT
+				return NatResult(
+					nat_type=NatType.SYMMETRIC,
+					external_ip=ip1,
+					external_port=port1,
+					details=f"Different external IPs detected ({ip1} vs {ip2})"
+				)
+			
+			if port1 != port2:
+				# Same IP but different ports = Symmetric NAT
+				return NatResult(
+					nat_type=NatType.SYMMETRIC,
+					external_ip=ip1,
+					external_port=port1,
+					details=f"Port mapping changes per destination ({port1} vs {port2})"
+				)
+			
+			# Same IP and same port - this indicates Cone NAT behavior
+			# Note: Without testing unsolicited incoming packets, we cannot
+			# distinguish Full Cone, Restricted Cone, or Port Restricted Cone.
+			# We report as Full Cone as it's compatible with all cone behaviors.
+			return NatResult(
+				nat_type=NatType.FULL_CONE,
+				external_ip=ip1,
+				external_port=port1,
+				details="Consistent port mapping (Cone NAT behavior detected)"
+			)
+			
+	except OSError as e:
+		return NatResult(
+			nat_type=NatType.UNKNOWN,
+			external_ip=external_ip1,
+			external_port=external_port1,
+			details=f"Socket error during NAT detection: {e}"
+		)
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-	parser = argparse.ArgumentParser(description="Test coturn/STUN server availability")
+	parser = argparse.ArgumentParser(description="Test coturn/STUN server availability and detect NAT type")
 	parser.add_argument(
 		"--host",
 		default="stun.l.google.com",
@@ -380,6 +589,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 		"--password",
 		help="Password for long-term credential authentication (optional)",
 	)
+	parser.add_argument(
+		"--nat-detect",
+		action="store_true",
+		help="Detect NAT type instead of testing a single STUN server",
+	)
 	args = parser.parse_args(argv)
 
 	if bool(args.username) ^ bool(args.password):
@@ -390,6 +604,34 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[list[str]] = None) -> int:
 	args = parse_args(argv)
+	
+	# NAT detection mode
+	if args.nat_detect:
+		print("🔍 Detecting NAT type...")
+		nat_result = detect_nat_type(timeout=args.timeout)
+		
+		# Display NAT type icon based on result
+		nat_icons = {
+			NatType.OPEN: "🌐",
+			NatType.FULL_CONE: "🟢",
+			NatType.RESTRICTED_CONE: "🟡",
+			NatType.PORT_RESTRICTED_CONE: "🟠",
+			NatType.SYMMETRIC: "🔴",
+			NatType.BLOCKED: "⛔",
+			NatType.UNKNOWN: "❓",
+		}
+		icon = nat_icons.get(nat_result.nat_type, "❓")
+		
+		print(f"{icon} NAT Type: {nat_result.nat_type.value}")
+		if nat_result.external_ip:
+			print(f"  External Address: {nat_result.external_ip}:{nat_result.external_port}")
+		if nat_result.details:
+			print(f"  Details: {nat_result.details}")
+		
+		# Return 0 for successful detection (even if NAT is restrictive)
+		return 0 if nat_result.nat_type != NatType.BLOCKED else 1
+	
+	# Standard STUN test mode
 	result = check_stun_server(
 		args.host,
 		args.port,
