@@ -1,150 +1,189 @@
 import flet as ft
 from main import check_stun_server, detect_nat_type, NatType
 
+class StunTester(ft.Container):
+    def __init__(self):
+        super().__init__(expand=True, padding=20)
+        
+        self.host_input = ft.TextField(label="STUN Host", value="stun.l.google.com", width=300)
+        self.port_input = ft.TextField(label="Port", value="19302", width=100, keyboard_type=ft.KeyboardType.NUMBER)
+        self.username_input = ft.TextField(label="Username (Optional)", width=410)
+        self.password_input = ft.TextField(label="Password (Optional)", password=True, can_reveal_password=True, width=410)
+        
+        self.result_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, size=40, color=ft.Colors.GREY)
+        self.result_text = ft.Text("Ready to test", size=20, weight=ft.FontWeight.BOLD)
+        self.result_details = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
+        
+        self.loading_indicator = ft.ProgressRing(visible=False)
+        self.test_button = ft.ElevatedButton(text="Test Connectivity", icon=ft.Icons.PLAY_ARROW, width=200, on_click=self.run_test)
 
-def main(page: ft.Page):
-    page.title = "WebRTC STUN Tester"
-    page.theme_mode = ft.ThemeMode.SYSTEM
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-    page.window.width = 480
-    page.window.height = 850
-    page.window.resizable = True
+        input_form = ft.Card(
+            content=ft.Container(
+                padding=20,
+                content=ft.Column(
+                    [
+                        ft.Text("STUN Connectivity Tester", size=22, weight=ft.FontWeight.BOLD),
+                        ft.ResponsiveRow(
+                            [
+                                ft.Container(self.host_input, col={'xs': 12, 'sm': 8}),
+                                ft.Container(self.port_input, col={'xs': 12, 'sm': 4}),
+                            ],
+                            run_spacing=12,
+                        ),
+                        self.username_input,
+                        self.password_input,
+                        ft.Row([self.test_button, self.loading_indicator], alignment=ft.MainAxisAlignment.START, spacing=12),
+                    ],
+                    spacing=16,
+                ),
+            )
+        )
 
-    def toggle_theme(e):
-        page.theme_mode = ft.ThemeMode.LIGHT if page.theme_mode == ft.ThemeMode.DARK else ft.ThemeMode.DARK
-        page.update()
+        result_panel = ft.Card(
+            content=ft.Container(
+                padding=20,
+                content=ft.Column(
+                    [
+                        ft.Row([self.result_icon, self.result_text], alignment=ft.MainAxisAlignment.START, spacing=12),
+                        ft.Container(
+                            content=self.result_details,
+                            padding=10,
+                            bgcolor=ft.Colors.SECONDARY_CONTAINER,
+                            border_radius=ft.border_radius.all(12),
+                            expand=True,
+                        ),
+                    ],
+                    spacing=16,
+                ),
+            ),
+        )
 
-    page.appbar = ft.AppBar(
-        title=ft.Text("WebRTC STUN Tester"),
-        center_title=True,
-        actions=[
-            ft.IconButton(ft.Icons.BRIGHTNESS_6, on_click=toggle_theme)
-        ],
-    )
+        self.content = ft.Column(
+            [input_form, result_panel],
+            spacing=24,
+            expand=True,
+        )
 
-    # State variables
-    host_input = ft.TextField(label="STUN Host", value="stun.l.google.com", width=300)
-    port_input = ft.TextField(label="Port", value="19302", width=100, keyboard_type=ft.KeyboardType.NUMBER)
-    username_input = ft.TextField(label="Username (Optional)", width=410)
-    password_input = ft.TextField(label="Password (Optional)",
-                                  password=True, can_reveal_password=True, width=410)
+    def log(self, message: str, color: str | None = None):
+        self.result_details.controls.append(ft.Text(message, color=color, selectable=True))
+        self.result_details.update()
 
-    result_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, size=40, color=ft.Colors.GREY)
-    result_text = ft.Text("Ready to test", size=20, weight=ft.FontWeight.BOLD)
-    result_details = ft.Column(scroll=ft.ScrollMode.AUTO, height=150)
-
-    loading_indicator = ft.ProgressRing(visible=False)
-    test_button = ft.ElevatedButton(text="Test Connectivity", icon=ft.Icons.PLAY_ARROW, width=200)
-    
-    # NAT Detection UI elements
-    nat_result_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, size=40, color=ft.Colors.GREY)
-    nat_result_text = ft.Text("Ready to detect", size=20, weight=ft.FontWeight.BOLD)
-    nat_result_details = ft.Column(scroll=ft.ScrollMode.AUTO, height=100)
-    nat_loading_indicator = ft.ProgressRing(visible=False)
-    nat_detect_button = ft.ElevatedButton(text="Detect NAT Type", icon=ft.Icons.ROUTER, width=200)
-
-    def log(message: str, color: str | None = None):
-        result_details.controls.append(ft.Text(message, color=color, selectable=True))
-        page.update()
-
-    def nat_log(message: str, color: str | None = None):
-        nat_result_details.controls.append(ft.Text(message, color=color, selectable=True))
-        page.update()
-
-    def on_test_click(e):
-        # Reset UI
-        result_details.controls.clear()
-        result_icon.name = ft.Icons.HOURGLASS_EMPTY
-        result_icon.color = ft.Colors.PRIMARY
-        result_text.value = "Testing..."
-        result_text.color = None
-        loading_indicator.visible = True
-        test_button.disabled = True
-        page.update()
+    def run_test(self, e):
+        self.result_details.controls.clear()
+        self.result_icon.name = ft.Icons.HOURGLASS_EMPTY
+        self.result_icon.color = ft.Colors.PRIMARY
+        self.result_text.value = "Testing..."
+        self.result_text.color = None
+        self.loading_indicator.visible = True
+        self.test_button.disabled = True
+        self.update()
 
         try:
-            host = host_input.value
-            port = int(port_input.value)
-            username = username_input.value if username_input.value else None
-            password = password_input.value if password_input.value else None
+            host = self.host_input.value or ""
+            port = int(self.port_input.value or "0")
+            username = self.username_input.value if self.username_input.value else None
+            password = self.password_input.value if self.password_input.value else None
 
-            log(f"Connecting to {host}:{port}...", ft.Colors.PRIMARY)
+            self.log(f"Connecting to {host}:{port}...", ft.Colors.PRIMARY)
             
-            # Run the test
-            # Note: In a real GUI app, network calls should be async or threaded to avoid freezing UI.
-            # For this simple tool, we'll call it directly, but Flet handles it reasonably well for short tasks.
-            result = check_stun_server(
-                host=host,
-                port=port,
-                timeout=5.0,
-                attempts=3,
-                username=username,
-                password=password
-            )
-
-            loading_indicator.visible = False
-            test_button.disabled = False
+            result = check_stun_server(host, port, 5.0, 3, username, password)
 
             if result.success:
-                result_icon.name = ft.Icons.CHECK_CIRCLE
-                result_icon.color = ft.Colors.GREEN
-                result_text.value = "Success!"
-                result_text.color = ft.Colors.GREEN
-                
-                log(f"✅ Connected successfully!", ft.Colors.GREEN)
+                self.result_icon.name = ft.Icons.CHECK_CIRCLE
+                self.result_icon.color = ft.Colors.GREEN
+                self.result_text.value = "Success!"
+                self.result_text.color = ft.Colors.GREEN
+                self.log(f"✅ Connected successfully!", ft.Colors.GREEN)
                 if result.response_from:
-                    log(f"Response from: {result.response_from[0]}:{result.response_from[1]}")
-                log(f"Latency: {result.latency_ms:.2f} ms")
-                log(f"Mapped Address: {result.mapped_address}:{result.mapped_port}", ft.Colors.SECONDARY)
+                    self.log(f"Response from: {result.response_from[0]}:{result.response_from[1]}")
+                self.log(f"Latency: {result.latency_ms:.2f} ms")
+                self.log(f"Mapped Address: {result.mapped_address}:{result.mapped_port}", ft.Colors.SECONDARY)
             else:
-                result_icon.name = ft.Icons.ERROR
-                result_icon.color = ft.Colors.RED
-                result_text.value = "Failed"
-                result_text.color = ft.Colors.RED
-                
-                log(f"❌ Connection failed.", ft.Colors.RED)
+                self.result_icon.name = ft.Icons.ERROR
+                self.result_icon.color = ft.Colors.RED
+                self.result_text.value = "Failed"
+                self.result_text.color = ft.Colors.RED
+                self.log(f"❌ Connection failed.", ft.Colors.RED)
                 if result.error:
-                    log(f"Error: {result.error}", ft.Colors.RED)
+                    self.log(f"Error: {result.error}", ft.Colors.RED)
 
-        except ValueError:
-            loading_indicator.visible = False
-            test_button.disabled = False
-            result_icon.name = ft.Icons.WARNING
-            result_icon.color = ft.Colors.ORANGE
-            result_text.value = "Invalid Input"
-            log("Please check port number.", ft.Colors.ORANGE)
         except Exception as ex:
-            loading_indicator.visible = False
-            test_button.disabled = False
-            result_icon.name = ft.Icons.ERROR
-            result_icon.color = ft.Colors.RED
-            result_text.value = "Error"
-            log(f"Unexpected error: {ex}", ft.Colors.RED)
+            self.result_icon.name = ft.Icons.ERROR
+            self.result_icon.color = ft.Colors.RED
+            self.result_text.value = "Error"
+            self.log(f"Error: {ex}", ft.Colors.RED)
         
-        page.update()
+        self.loading_indicator.visible = False
+        self.test_button.disabled = False
+        self.update()
 
-    def on_nat_detect_click(e):
-        # Reset NAT detection UI
-        nat_result_details.controls.clear()
-        nat_result_icon.name = ft.Icons.HOURGLASS_EMPTY
-        nat_result_icon.color = ft.Colors.PRIMARY
-        nat_result_text.value = "Detecting..."
-        nat_result_text.color = None
-        nat_loading_indicator.visible = True
-        nat_detect_button.disabled = True
-        page.update()
+class NatDetector(ft.Container):
+    def __init__(self):
+        super().__init__(expand=True, padding=20)
+        
+        self.nat_result_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, size=40, color=ft.Colors.GREY)
+        self.nat_result_text = ft.Text("Ready to detect", size=20, weight=ft.FontWeight.BOLD)
+        self.nat_result_details = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
+        self.nat_loading_indicator = ft.ProgressRing(visible=False)
+        self.nat_detect_button = ft.ElevatedButton(text="Detect NAT Type", icon=ft.Icons.ROUTER, width=200, on_click=self.run_detect)
+
+        primary_actions = ft.Card(
+            content=ft.Container(
+                padding=20,
+                content=ft.Column(
+                    [
+                        ft.Text("NAT Type Detection", size=22, weight=ft.FontWeight.BOLD),
+                        ft.Row([self.nat_detect_button, self.nat_loading_indicator], spacing=12),
+                    ],
+                    spacing=16,
+                ),
+            )
+        )
+
+        nat_results = ft.Card(
+            content=ft.Container(
+                padding=20,
+                content=ft.Column(
+                    [
+                        ft.Row([self.nat_result_icon, self.nat_result_text], spacing=12),
+                        ft.Container(
+                            content=self.nat_result_details,
+                            padding=10,
+                            bgcolor=ft.Colors.SECONDARY_CONTAINER,
+                            border_radius=ft.border_radius.all(12),
+                            expand=True,
+                        ),
+                    ],
+                    spacing=16,
+                ),
+            )
+        )
+
+        self.content = ft.Column(
+            [primary_actions, nat_results],
+            spacing=24,
+            expand=True,
+        )
+
+    def log(self, message: str, color: str | None = None):
+        self.nat_result_details.controls.append(ft.Text(message, color=color, selectable=True))
+        self.nat_result_details.update()
+
+    def run_detect(self, e):
+        self.nat_result_details.controls.clear()
+        self.nat_result_icon.name = ft.Icons.HOURGLASS_EMPTY
+        self.nat_result_icon.color = ft.Colors.PRIMARY
+        self.nat_result_text.value = "Detecting..."
+        self.nat_result_text.color = None
+        self.nat_loading_indicator.visible = True
+        self.nat_detect_button.disabled = True
+        self.update()
 
         try:
-            nat_log("🔍 Querying STUN servers...", ft.Colors.PRIMARY)
+            self.log("🔍 Querying STUN servers...", ft.Colors.PRIMARY)
             
-            # Run NAT detection
             result = detect_nat_type(timeout=5.0)
 
-            nat_loading_indicator.visible = False
-            nat_detect_button.disabled = False
-
-            # Map NAT types to icons and colors
             nat_type_config = {
                 NatType.OPEN: (ft.Icons.PUBLIC, ft.Colors.GREEN, "🌐"),
                 NatType.FULL_CONE: (ft.Icons.CHECK_CIRCLE, ft.Colors.GREEN, "🟢"),
@@ -160,98 +199,165 @@ def main(page: ft.Page):
                 (ft.Icons.HELP_OUTLINE, ft.Colors.GREY, "❓")
             )
 
-            nat_result_icon.name = icon
-            nat_result_icon.color = color
-            nat_result_text.value = result.nat_type.value
-            nat_result_text.color = color
+            self.nat_result_icon.name = icon
+            self.nat_result_icon.color = color
+            self.nat_result_text.value = result.nat_type.value
+            self.nat_result_text.color = color
 
-            nat_log(f"{emoji} NAT Type: {result.nat_type.value}", color)
+            self.log(f"{emoji} NAT Type: {result.nat_type.value}", color)
             if result.external_ip:
-                nat_log(f"External Address: {result.external_ip}:{result.external_port}")
+                self.log(f"External Address: {result.external_ip}:{result.external_port}")
             if result.details:
-                nat_log(f"Details: {result.details}", ft.Colors.SECONDARY)
+                self.log(f"Details: {result.details}", ft.Colors.SECONDARY)
 
         except Exception as ex:
-            nat_loading_indicator.visible = False
-            nat_detect_button.disabled = False
-            nat_result_icon.name = ft.Icons.ERROR
-            nat_result_icon.color = ft.Colors.RED
-            nat_result_text.value = "Error"
-            nat_log(f"Unexpected error: {ex}", ft.Colors.RED)
+            self.nat_result_icon.name = ft.Icons.ERROR
+            self.nat_result_icon.color = ft.Colors.RED
+            self.nat_result_text.value = "Error"
+            self.log(f"Error: {ex}", ft.Colors.RED)
         
+        self.nat_loading_indicator.visible = False
+        self.nat_detect_button.disabled = False
+        self.update()
+
+def main(page: ft.Page):
+    page.title = "WebRTC Tools"
+    page.theme_mode = ft.ThemeMode.SYSTEM
+    page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE, use_material3=True)
+    page.dark_theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE, use_material3=True)
+    page.padding = 0
+    
+    # Views
+    stun_tester = StunTester()
+    nat_detector = NatDetector()
+    views = [stun_tester, nat_detector]
+    
+    # Navigation State
+    current_view_index = 0
+    
+    def change_view(index):
+        nonlocal current_view_index
+        if index == current_view_index:
+            return
+        current_view_index = index
+        # Update Rail
+        rail.selected_index = index
+        # Update Drawer
+        drawer.selected_index = index
+        # Update Content
+        content_area.content = views[index]
         page.update()
 
-    test_button.on_click = on_test_click
-    nat_detect_button.on_click = on_nat_detect_click
+    def on_nav_change(e):
+        selected = getattr(e.control, "selected_index", 0) or 0
+        change_view(selected)
+        if isinstance(e.control, ft.NavigationDrawer) and page.drawer is not None:
+            page.drawer.open = False
+            page.update()
 
-    # Layout
-    page.add(
-        ft.Card(
-            content=ft.Container(
-                padding=20,
-                content=ft.Column(
-                    [
-                        # ft.Text("WebRTC STUN Tester", size=24, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
-                        # ft.Divider(),
-                        ft.Row([host_input, port_input], alignment=ft.MainAxisAlignment.CENTER),
-                        username_input,
-                        password_input,
-                        ft.Divider(),
-                        ft.Row([test_button, loading_indicator], alignment=ft.MainAxisAlignment.CENTER),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=20
-                ),
-            ),
-            width=450,
+    # Navigation Controls
+    nav_items = [
+        ft.NavigationRailDestination(
+            icon=ft.Icons.NETWORK_CHECK, 
+            selected_icon=ft.Icons.NETWORK_CHECK, 
+            label="Connectivity"
         ),
-        ft.Card(
-            content=ft.Container(
-                padding=20,
-                content=ft.Column(
-                    [
-                        ft.Row([result_icon, result_text], alignment=ft.MainAxisAlignment.CENTER),
-                        ft.Divider(),
-                        ft.Container(
-                            content=result_details,
-                            bgcolor=ft.Colors.ON_INVERSE_SURFACE,
-                            border_radius=5,
-                            padding=10,
-                            width=410
-                        )
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER
-                )
-            ),
-            width=450
+        ft.NavigationRailDestination(
+            icon=ft.Icons.ROUTER, 
+            selected_icon=ft.Icons.ROUTER, 
+            label="NAT Type"
         ),
-        # NAT Detection Card
-        ft.Card(
-            content=ft.Container(
-                padding=20,
-                content=ft.Column(
-                    [
-                        ft.Text("NAT Type Detection", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Divider(),
-                        ft.Row([nat_detect_button, nat_loading_indicator], alignment=ft.MainAxisAlignment.CENTER),
-                        ft.Divider(),
-                        ft.Row([nat_result_icon, nat_result_text], alignment=ft.MainAxisAlignment.CENTER),
-                        ft.Container(
-                            content=nat_result_details,
-                            bgcolor=ft.Colors.ON_INVERSE_SURFACE,
-                            border_radius=5,
-                            padding=10,
-                            width=410
-                        )
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=10
-                )
-            ),
-            width=450
-        )
+    ]
+    
+    drawer_items = [
+        ft.NavigationDrawerDestination(
+            icon=ft.Icons.NETWORK_CHECK, 
+            label="Connectivity"
+        ),
+        ft.NavigationDrawerDestination(
+            icon=ft.Icons.ROUTER, 
+            label="NAT Type"
+        ),
+    ]
+
+    rail = ft.NavigationRail(
+        selected_index=0,
+        label_type=ft.NavigationRailLabelType.ALL,
+        min_width=100,
+        min_extended_width=400,
+        destinations=nav_items,
+        on_change=on_nav_change
     )
 
+    drawer = ft.NavigationDrawer(
+        controls=[
+            ft.Container(height=12),
+            ft.Text("WebRTC Tools", size=24, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            ft.Divider(),
+            *drawer_items,
+        ],
+        on_change=on_nav_change,
+        selected_index=0
+    )
+
+    # Layout Elements
+    content_area = ft.Container(expand=True, content=stun_tester)
+    divider = ft.VerticalDivider(width=1)
+    
+    # Theme Toggle
+    def toggle_theme(e):
+        page.theme_mode = ft.ThemeMode.LIGHT if page.theme_mode == ft.ThemeMode.DARK else ft.ThemeMode.DARK
+        page.update()
+
+    # AppBar (for mobile)
+    def open_drawer(e):
+        if page.drawer is not None:
+            page.drawer.open = True
+            page.update()
+
+    appbar = ft.AppBar(
+        leading=ft.IconButton(ft.Icons.MENU, on_click=open_drawer),
+        title=ft.Text("WebRTC Tools"),
+        center_title=True,
+        actions=[
+            ft.IconButton(ft.Icons.BRIGHTNESS_6, on_click=toggle_theme)
+        ],
+    )
+    
+    # Responsive Logic
+    def handle_resize(e):
+        width = (page.width or 0)
+        if width == 0 and page.window is not None:
+            width = page.window.width or 0
+        if width >= 700:
+            # Desktop/Tablet Mode
+            rail.visible = True
+            divider.visible = True
+            page.appbar = None # Remove appbar
+        else:
+            # Mobile Mode
+            rail.visible = False
+            divider.visible = False
+            page.appbar = appbar # Add appbar
+        page.update()
+
+    page.on_resized = handle_resize
+    page.drawer = drawer
+    
+    # Initial Layout Construction
+    page.add(
+        ft.Row(
+            [
+                rail,
+                divider,
+                content_area,
+            ],
+            expand=True,
+        )
+    )
+    
+    # Trigger initial resize check
+    handle_resize(None)
 
 if __name__ == "__main__":
     ft.app(target=main)
